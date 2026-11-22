@@ -1,0 +1,130 @@
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import request from 'supertest';
+import { randomUUID } from 'node:crypto';
+import { createTestDatabase } from './database.js';
+import { today, addDays, calculateValidity } from '../src/domain.js';
+
+let cleanup,app,pool,rows,manager,secretary,other,mCsrf,sCsrf,oCsrf,student,photoId;
+const password='Un mot de passe de test 2026!';
+const post=(agent,path,csrf,body)=>agent.post(path).set('X-CSRF-Token',csrf).send(body);
+const upload=(agent,csrf,purpose,bytes,extra='')=>agent.post(`/api/files?purpose=${purpose}&name=fichier${extra}`).set('X-CSRF-Token',csrf).set('Content-Type','application/octet-stream').send(bytes);
+const login=async(agent,email)=>{const csrf=(await agent.get('/api/auth/bootstrap')).body.csrf;return (await post(agent,'/api/auth/login',csrf,{email,password}).expect(200)).body.csrf;};
+const pdf=text=>Buffer.from(`%PDF-1.4\n${text}\n%%EOF`);
+const png=Buffer.concat([Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]),Buffer.from('photo')]);
+const past=addDays(today(),-1)>='2026-11-05'?addDays(today(),-1):today();
+const studentData=extra=>({center_id:1,name:'Grâce Manga Biloa',class_name:'4e',group_name:'',school_year:'2026-2027',parent_name:'Parent Manga',parent_phone:'+237 699 00 00 01',parent_email:'',quarter:'Mendong',school_status:'redoublant',...extra});
+const summary=async(agent,center)=>(await agent.get('/api/reprise').expect(200)).body.centers.find(c=>c.center_id===center);
+
+before(async()=>{
+  cleanup=await createTestDatabase();
+  ({pool,rows}=await import('../src/db.js'));
+  app=(await import('../src/app.js')).createApp();await app.locals.sessionStore.onReady();
+  manager=request.agent(app);secretary=request.agent(app);other=request.agent(app);
+  mCsrf=(await manager.get('/api/auth/bootstrap')).body.csrf;
+  mCsrf=(await post(manager,'/api/auth/setup',mCsrf,{name:'Promoteur',email:'manager@example.com',password,token:process.env.SETUP_TOKEN}).expect(201)).body.csrf;
+  await post(manager,'/api/users',mCsrf,{name:'Secrétaire Biyem',email:'s1@example.com',password,center_id:1}).expect(201);
+  await post(manager,'/api/users',mCsrf,{name:'Secrétaire Mendong',email:'s2@example.com',password,center_id:2}).expect(201);
+  sCsrf=await login(secretary,'s1@example.com');oCsrf=await login(other,'s2@example.com');
+});
+after(async()=>{await app?.locals.sessionStore.close();await pool?.end();await cleanup?.();});
+
+test('Validité : seuls les paiements qui soldent une échéance prolongent',()=>{
+  const base={tariff_id:1,period:'2026-11',due_amount:5000,duration_days:30};
+  assert.equal(calculateValidity([{...base,operation_date:'2026-11-10',amount:2000}]),null);
+  assert.equal(calculateValidity([{...base,operation_date:'2026-11-10',amount:2000},{...base,operation_date:'2026-11-12',amount:3000}]),'2026-12-12');
+});
+test('Fiche élève : quartier, statut scolaire, date réelle et doublon signalé',async()=>{
+  await post(secretary,'/api/students',sCsrf,studentData({school_status:'autre'})).expect(400);
+  student=(await post(secretary,'/api/students',sCsrf,studentData({reprise:true,enrolled_on:past})).expect(201)).body.id;
+  const created=(await secretary.get(`/api/students/${student}`)).body;
+  assert.deepEqual([created.quarter,created.school_status,created.enrolled_on.slice(0,10),created.source],['Mendong','redoublant',past,'reprise']);
+  const dup=await post(secretary,'/api/students',sCsrf,studentData({name:'  grace  MANGA biloa '})).expect(409);
+  assert.equal(dup.body.duplicate,true);
+  await post(secretary,'/api/students',sCsrf,studentData({reprise:true,enrolled_on:'2026-10-01'})).expect(400);
+  assert.equal((await secretary.get('/api/students/similar?name=Grace Manga Biloa')).body.length,1);
+  assert.equal((await other.get('/api/students/similar?name=Grace Manga Biloa')).body.length,0,'pas de fuite entre sièges');
+});
+test('Paiement partiel : reste à payer, reçu numéroté et validité à l’échéance soldée',async()=>{
+  const first=await post(secretary,'/api/payments',sCsrf,{student_id:student,tariff_id:1,method:'cash',amount:2000,period:today().slice(0,7),request_key:randomUUID()}).expect(201);
+  assert.equal(first.body.remaining,3000);assert.equal(first.body.valid_until,null);
+  const due=(await secretary.get(`/api/students/${student}/due?tariff_id=1&period=${today().slice(0,7)}`)).body;assert.equal(due.remaining,3000);
+  await post(secretary,'/api/payments',sCsrf,{student_id:student,tariff_id:1,method:'cash',amount:3500,period:today().slice(0,7),request_key:randomUUID()}).expect(400);
+  const second=await post(secretary,'/api/payments',sCsrf,{student_id:student,tariff_id:1,method:'mtn',period:today().slice(0,7),request_key:randomUUID()}).expect(201);
+  assert.equal(second.body.remaining,0);assert.equal(second.body.valid_until,addDays(today(),30));
+  const [n1,n2]=[first.body.receipt_number,second.body.receipt_number].map(n=>Number(n.slice(-6)));assert.equal(n2,n1+1);
+  const entry=(await secretary.get(`/api/ledger/${second.body.id}`)).body;assert.equal(entry.balance_after,0);assert.equal(entry.due_amount,5000);
+  await post(secretary,'/api/payments',sCsrf,{student_id:student,tariff_id:1,method:'cash',period:today().slice(0,7),request_key:randomUUID()}).expect(409);
+});
+test('Reprise : date réelle, référence de reçu unique, justificatif et doublons',async()=>{
+  const proof=(await upload(secretary,sCsrf,'justificatif',pdf('facture'),'.pdf').expect(201)).body.id;
+  await upload(secretary,sCsrf,'justificatif',Buffer.from('<html>pas un pdf</html>')).expect(400);
+  const body={center_id:1,kind:'expense',amount:1500,category:'Fournitures',description:'Craies et cahiers',beneficiary:'Librairie',method:'cash',reprise:true,operation_date:past,receipt_ref:'F-001',attachment_id:proof};
+  const expense=await post(secretary,'/api/ledger',sCsrf,{...body,request_key:randomUUID()}).expect(201);
+  const saved=(await secretary.get(`/api/ledger/${expense.body.id}`)).body;
+  assert.deepEqual([saved.operation_date.slice(0,10),saved.source,saved.receipt_ref,saved.attachment_file_id],[past,'reprise','F-001',proof]);
+  await post(secretary,'/api/ledger',sCsrf,{...body,request_key:randomUUID()}).expect(409);
+  const dup=await post(secretary,'/api/ledger',sCsrf,{...body,receipt_ref:'',attachment_id:'',request_key:randomUUID()}).expect(409);assert.equal(dup.body.duplicate,true);
+  await post(secretary,'/api/ledger',sCsrf,{...body,receipt_ref:'',attachment_id:'',missing_doc:true,confirm_duplicate:true,request_key:randomUUID()}).expect(201);
+  await post(secretary,'/api/ledger',sCsrf,{...body,operation_date:addDays(today(),1),receipt_ref:'',attachment_id:'',request_key:randomUUID()}).expect(400);
+  await other.get(`/api/files/${proof}`).expect(403);
+  const file=await secretary.get(`/api/files/${proof}`).expect(200);assert.equal(file.headers['content-type'],'application/pdf');
+  assert.equal((await summary(secretary,1)).operations.missing_docs,1);
+});
+test('Transferts entre caisses et reversements : trésorerie, annulation des deux écritures',async()=>{
+  await post(manager,'/api/ledger',mCsrf,{center_id:2,kind:'opening',amount:10000,category:'Solde initial',description:'Espèces en caisse au 5 novembre',method:'cash',reprise:true,operation_date:'2026-11-05',request_key:randomUUID()}).expect(201);
+  await post(other,'/api/transfers',oCsrf,{center_id:2,kind:'transfer',to_center_id:2,amount:1000,description:'Erreur',method:'cash',request_key:randomUUID()}).expect(400);
+  await post(other,'/api/transfers',oCsrf,{center_id:1,kind:'transfer',to_center_id:2,amount:1000,description:'Pas mon siège',method:'cash',request_key:randomUUID()}).expect(403);
+  const transfer=await post(other,'/api/transfers',oCsrf,{center_id:2,kind:'transfer',to_center_id:1,amount:4000,description:'Approvisionnement Biyem',method:'cash',request_key:randomUUID()}).expect(201);
+  await post(other,'/api/transfers',oCsrf,{center_id:2,kind:'remittance',amount:2000,description:'Remise au promoteur',beneficiary:'Promoteur',method:'cash',request_key:randomUUID()}).expect(201);
+  let mendong=await summary(manager,2);
+  assert.deepEqual([mendong.opening,mendong.transfers_out,mendong.expenses,mendong.theoretical],[10000,6000,0,4000]);
+  assert.equal((await summary(manager,1)).transfers_in,4000);
+  await post(manager,`/api/ledger/${transfer.body.id}/reverse`,mCsrf,{reason:'Transfert non effectué',request_key:randomUUID()}).expect(201);
+  mendong=await summary(manager,2);assert.equal(mendong.transfers_out,2000);assert.equal(mendong.theoretical,8000);
+  assert.equal((await summary(manager,1)).transfers_in,0,'l’écriture reçue est aussi annulée');
+});
+test('Rapprochement : écart à expliquer, validation tracée puis verrouillage de la reprise',async()=>{
+  await post(manager,'/api/reprise/2/validate',mCsrf,{explanation:''}).expect(400);
+  await post(other,'/api/cash-counts',oCsrf,{center_id:2,count_date:today(),cash_amount:7500,other_amount:0,notes:'Comptage du soir'}).expect(201);
+  const s=await summary(manager,2);assert.equal(s.physical,7500);assert.equal(s.gap,-500);
+  await post(other,'/api/reprise/2/validate',oCsrf,{explanation:'Écart expliqué'}).expect(403);
+  await post(manager,'/api/reprise/2/validate',mCsrf,{explanation:'court'}).expect(400);
+  await post(manager,'/api/reprise/2/validate',mCsrf,{explanation:'Pièce de 500 FCFA remise au gardien, reçu manquant.'}).expect(201);
+  await post(manager,'/api/reprise/2/validate',mCsrf,{explanation:'Deuxième validation'}).expect(409);
+  const locked=await post(other,'/api/ledger',oCsrf,{center_id:2,kind:'expense',amount:100,category:'Divers',description:'Oubli',method:'cash',reprise:true,operation_date:past,request_key:randomUUID()}).expect(409);
+  assert.match(locked.body.error,/validée/);
+  await post(other,'/api/ledger',oCsrf,{center_id:2,kind:'expense',amount:100,category:'Divers',description:'Dépense du jour',method:'cash',request_key:randomUUID()}).expect(201);
+  const [v]=await rows('SELECT validated_by,gap,snapshot FROM gr_reprise_validations WHERE center_id=2');assert.equal(v.gap,-500);assert.ok(v.validated_by);
+  await post(manager,'/api/reprise/2/reopen',mCsrf,{reason:'Reçu retrouvé à saisir'}).expect(200);
+  assert.equal((await summary(manager,2)).validation,null);
+  assert.equal((await rows('SELECT COUNT(*) AS n FROM gr_reprise_validations WHERE center_id=2'))[0].n,1,'la validation révoquée reste dans l’historique');
+});
+test('Dossier enseignant : photo et matières obligatoires, matricule unique',async()=>{
+  const base={matricule:'ENS-001',last_name:'Essomba',first_name:'Paul',address:'Yaoundé',grade:'PLEG',email:'paul@example.com',phone:'+237 699 22 33 44',subject_ids:[1,2],pay_type:'hourly',hourly_rate:2000,monthly_salary:0,hired_on:today(),active:true};
+  await upload(secretary,sCsrf,'photo',png).expect(403);
+  await post(manager,'/api/teachers',mCsrf,base).expect(400);
+  photoId=(await upload(manager,mCsrf,'photo',png).expect(201)).body.id;
+  await post(manager,'/api/teachers',mCsrf,{...base,photo_file_id:photoId,subject_ids:[]}).expect(400);
+  const teacher=(await post(manager,'/api/teachers',mCsrf,{...base,photo_file_id:photoId}).expect(201)).body.id;
+  await post(manager,'/api/teachers',mCsrf,{...base,last_name:'Autre',photo_file_id:photoId}).expect(409);
+  await manager.put(`/api/teachers/${teacher}`).set('X-CSRF-Token',mCsrf).send({...base,subject_ids:[3]}).expect(200);
+  const saved=(await secretary.get(`/api/teachers/${teacher}`)).body;
+  assert.deepEqual([saved.name,saved.subject_ids,saved.subjects,saved.photo_file_id],['Essomba Paul',[3],'Français',photoId]);
+  await secretary.get(`/api/files/${photoId}`).expect(200);
+});
+test('Banque d’épreuves : PDF uniquement, doublon de fichier refusé, sujets différents acceptés',async()=>{
+  const file=(await upload(secretary,sCsrf,'exam',pdf('sujet maths 1'),'.pdf').expect(201)).body.id;
+  await upload(secretary,sCsrf,'exam',png).expect(400);
+  const exam={title:'Composition séquence 1',subject_id:1,class_name:'4e',sequence:'Séquence 1',school_year:'2026-2027',file_id:file};
+  const created=await post(secretary,'/api/exams',sCsrf,exam).expect(201);assert.match(created.body.reference,/^EP-\d{4}-0001$/);
+  await upload(other,oCsrf,'exam',pdf('sujet maths 1'),'.pdf').expect(409);
+  const other1=(await upload(other,oCsrf,'exam',pdf('sujet maths 2'),'.pdf').expect(201)).body.id;
+  await post(other,'/api/exams',oCsrf,{...exam,file_id:other1}).expect(409);
+  await post(other,'/api/exams',oCsrf,{...exam,title:'Composition séquence 1 — sujet B',file_id:other1}).expect(201);
+  const list=(await other.get('/api/exams?subject_id=1&class_name=4e&sequence=S%C3%A9quence%201').expect(200)).body;assert.equal(list.total,2);
+  assert.equal((await other.get('/api/exams?q=sujet B')).body.total,1);
+  await post(secretary,`/api/exams/${created.body.id}/archive`,sCsrf,{}).expect(403);
+  await post(manager,`/api/exams/${created.body.id}/archive`,mCsrf,{}).expect(200);
+  assert.equal((await other.get('/api/exams')).body.total,1);
+});

@@ -12,9 +12,12 @@ window.manualContent = ({ icon, button }) => [
 <tr><td>Dépenses et autres recettes</td><td>Oui</td><td>Oui, caisse de son siège</td></tr>
 <tr><td>Solde initial d’un siège</td><td>Oui (une fois par siège)</td><td>Non</td></tr>
 <tr><td>Annuler une opération de caisse</td><td>Oui, avec un motif</td><td>Non : demander au manager</td></tr>
-<tr><td>Créer ou modifier un enseignant, fixer son salaire</td><td>Oui</td><td>Non</td></tr>
+<tr><td>Créer ou modifier un dossier enseignant (photo, matières), fixer son salaire</td><td>Oui</td><td>Non</td></tr>
 <tr><td>Saisir une séance, verser une avance ou un salaire</td><td>Oui</td><td>Oui, pour son siège</td></tr>
-<tr><td>Sièges, comptes secrétaires, tarifs, session, journal</td><td>Oui</td><td>Non</td></tr>
+<tr><td>Déposer et consulter des sujets d’épreuves</td><td>Oui, et archiver</td><td>Oui</td></tr>
+<tr><td>Reprise : saisie datée, comptage de caisse</td><td>Oui</td><td>Oui, pour son siège</td></tr>
+<tr><td>Valider la reprise d’un siège</td><td>Oui</td><td>Non</td></tr>
+<tr><td>Sièges, comptes secrétaires, tarifs, matières, session, journal</td><td>Oui</td><td>Non</td></tr>
 </tbody></table>
 <p class="manual-tip">${icon('shield')}<span>Ces limites sont contrôlées par le serveur : une secrétaire ne peut pas voir ni modifier les données d’un autre siège, même en changeant l’adresse de la page.</span></p>`},
 
@@ -152,6 +155,42 @@ ${button('Saisir une séance','session-new','clock','secondary small-btn')}
 
 { id:'journal', title:'13. Journal d’activité', role:'manager', html:`
 <p>Chaque connexion, inscription, modification, paiement, annulation, séance et versement est enregistré avec son auteur, son siège et l’heure (en temps universel, UTC : ajouter 1 h pour l’heure de Yaoundé). Utile pour comprendre une erreur ou vérifier une activité inhabituelle.</p>`},
+
+{ id:'recus-partiels', title:'Reçus, paiements partiels et justificatifs', role:'all', html:`
+<h4>Le reçu (format A5)</h4>
+<p>Chaque paiement reçoit un <strong>numéro de reçu continu</strong> (<code>REC-2026-000123</code>). Le reçu tient sur une feuille <strong>A5 (148 × 210 mm, la moitié d’un A4)</strong> : élève, classe, motif, <strong>période concernée</strong>, montant payé, mode, <strong>reste à payer</strong>, signature du caissier et cachet. Dans la fenêtre d’impression, choisir l’imprimante et laisser le format proposé (A5) ; pour imprimer sur du A4, choisir « Ajuster » ou couper la feuille en deux.</p>
+<h4>Paiement partiel, arriéré, avance</h4>
+<ol><li>Choisir l’élève et le tarif. La <strong>période concernée</strong> propose le premier mois non soldé ; la modifier pour un arriéré (mois passé) ou une avance (mois futur).</li>
+<li>Le <strong>montant</strong> proposé est le reste dû. Le diminuer pour un paiement partiel.</li>
+<li>Le reçu indique le reste à payer. La <strong>validité n’est prolongée qu’une fois le mois soldé</strong>.</li></ol>
+<p>Les frais sans durée (inscription) ne se paient qu’une fois par fiche. L’inscription d’un élève n’est jamais un paiement : ses frais s’encaissent à part.</p>
+<h4>Justificatifs</h4>
+<p>Une dépense, une recette ou un transfert peut recevoir une photo ou un PDF (4 Mo maximum). Sans pièce, cocher <strong>« Pièce justificative manquante »</strong> : l’opération est signalée dans la caisse (filtre « Pièces manquantes ») et dans la reprise. La pièce peut être jointe plus tard depuis le justificatif de l’opération.</p>
+<h4>Transferts et reversements</h4>
+<p>Bouton <strong>« Transfert / reversement »</strong> dans la caisse. Un <strong>reversement au promoteur</strong> fait sortir l’argent d’une caisse ; un <strong>transfert</strong> le fait passer d’une caisse à une autre (deux écritures liées). Ce ne sont jamais des dépenses.</p>`},
+
+{ id:'epreuves', title:'Banque d’épreuves', role:'all', html:`
+<p>Les enseignants transmettent leurs sujets en PDF au secrétariat, qui les dépose dans la <strong>banque centralisée</strong>, visible depuis tous les sièges.</p>
+<ol><li><strong>Banque d’épreuves → Déposer un sujet</strong>. Choisir le PDF (4 Mo maximum) : il est envoyé tout de suite.</li>
+<li>Indiquer le titre, la matière, la classe, la séquence ou période, l’année scolaire et l’enseignant qui l’a transmis.</li>
+<li>Enregistrer. Le sujet reçoit une référence <code>EP-2026-0001</code> ; la date de dépôt et le déposant sont conservés.</li></ol>
+<p><strong>Doublons</strong> : un même fichier PDF est refusé s’il est déjà dans la banque. Un titre identique pour la même matière, classe et séquence est signalé et doit être confirmé. Plusieurs sujets différents pour une même combinaison sont acceptés.</p>
+<p><strong>Rechercher</strong> par mot, matière, classe, séquence ou année. <strong>Ouvrir</strong> affiche le PDF (imprimer depuis le lecteur PDF) ; l’icône de téléchargement l’enregistre. Le manager peut modifier les informations et <strong>archiver</strong> un sujet (il reste consultable dans « Archives »).</p>`},
+
+{ id:'reprise', title:'Reprise comptable (avant la mise en service)', role:'all', html:`
+<p>La page <strong>Reprise comptable</strong> sert à saisir les opérations réelles faites depuis le <strong>début de la reprise</strong> (5 novembre 2026 par défaut, réglable dans Paramètres), avec leur <strong>date réelle</strong>. La date de saisie et l’auteur sont enregistrés automatiquement.</p>
+<h4>Ordre de saisie</h4>
+<ol><li>Vérifier les paramètres : siège, classes, matières, tarifs, période ; saisir le <strong>solde initial réel</strong> (manager), avec son origine. Zéro seulement si la caisse était vide.</li>
+<li>Créer les fiches élèves (date réelle d’inscription). Une fiche du même nom dans le siège et la session est signalée.</li>
+<li>Saisir chaque paiement : date réelle, montant, motif, période couverte, <strong>n° du reçu papier</strong>. Un même n° de reçu est refusé deux fois dans un siège.</li>
+<li>Saisir toutes les dépenses : catégorie, motif, bénéficiaire, justificatif ou pièce manquante.</li>
+<li>Saisir les reversements au promoteur et les transferts entre caisses.</li>
+<li>Compter l’argent réellement présent et l’enregistrer (<strong>Comptage</strong>), espèces et Mobile Money/banque.</li>
+<li>Comparer : <strong>solde théorique = solde initial + encaissements − dépenses − transferts sortants (+ transferts reçus)</strong>. Tout écart doit être expliqué.</li>
+<li>Imprimer l’<strong>état PDF</strong> (par siège ou consolidé) et le soumettre au promoteur.</li></ol>
+<p class="manual-tip">${icon('shield')}<span>Ne jamais créer de fausse dépense ou recette pour ramener une caisse à zéro. Si l’argent doit sortir, le remettre réellement et enregistrer le reversement ou le transfert.</span></p>
+<h4>Validation (promoteur / manager)</h4>
+<p>Le bouton <strong>Valider</strong> d’un siège exige un comptage et, en cas d’écart, une explication. La validation est horodatée à son nom. Ensuite, plus aucune opération ne peut être antidatée dans ce siège : une correction passe par une <strong>annulation tracée</strong>. Une réouverture exceptionnelle demande un motif et garde l’ancienne validation dans l’historique.</p>`},
 
 { id:'routines', title:'14. Routines conseillées', role:'all', html:`
 <h4>Chaque jour</h4>

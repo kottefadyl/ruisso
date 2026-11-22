@@ -41,7 +41,11 @@ npm start
 - Manager : vision globale, création/modification des sièges, comptes secrétaires, tarifs et session scolaire.
 - Secrétaire : consultation et saisie uniquement dans son siège ; restrictions appliquées à chaque route côté serveur.
 - Élèves : inscription, modification, classe, groupe, session, coordonnées du parent, recherche et filtre de validité.
-- Paiements : tarif configurable, espèces / MTN Mobile Money / Orange Money / virement, prolongation automatique et reçu imprimable A4.
+- Paiements : tarif configurable, espèces / MTN Mobile Money / Orange Money / virement, **mois concerné**, **paiements partiels, arriérés et avances**, prolongation de validité quand le mois est soldé, reçu numéroté `REC-AAAA-NNNNNN` imprimable au **format A5** (148 × 210 mm, moitié d’un A4).
+- Fiche élève : **quartier** et **statut scolaire Nouveau / Redoublant** (indépendant du centre ; le parcours existant est proposé), date réelle d’inscription, signalement des doublons.
+- Dossier enseignant : matricule, nom, prénom, adresse, grade, téléphone, e-mail, **photographie obligatoire** et **une ou plusieurs matières** prédéfinies (liste gérée dans Paramètres), modifiables par le manager.
+- Banque d’épreuves : sujets PDF classés par matière, classe, séquence et année ; recherche, consultation, téléchargement ; doublon de fichier refusé, titre identique signalé ; archivage par le manager.
+- Reprise comptable : saisie des opérations depuis le début de la reprise (5 novembre 2026, réglable) avec date réelle et date de saisie, n° de reçu papier, justificatifs ou pièce manquante, transferts entre caisses et reversements au promoteur (trésorerie, pas des dépenses), comptages physiques, rapprochement, état PDF par siège et consolidé, validation horodatée par le manager puis verrouillage.
 - Caisse : recettes, dépenses, solde initial par siège, historique, références uniques et annulation justifiée par le manager.
 - Tableau de bord : effectifs de la session, entrées du jour, soldes, échéances, mouvements sur sept jours et répartition par siège.
 - Journal d’activité : connexions, modifications et opérations importantes.
@@ -70,13 +74,22 @@ Le solde initial se saisit depuis **Manuel d’utilisation** (section « Solde i
 - Un renouvellement anticipé ajoute des jours à la fin de validité existante. Si elle est expirée, la période commence le jour du paiement.
 - Validité : vert au-delà de 20 jours ; jaune entre 10 et 20 ; rouge entre 1 et 9 ; expirée à zéro ou en dessous. Sans paiement donnant des jours : « Non payé ».
 - L’inscription à 2 500 FCFA ne prolonge pas la validité. Inscription et mensualité se paient avec deux écritures distinctes.
-- Le montant payé est celui du tarif sélectionné, contrôlé côté serveur. Les paiements partiels, remises et opérations antidatées sont hors V1.
+- Le montant payé ne peut dépasser le reste dû pour le tarif et le mois concernés (contrôle serveur). Les opérations antidatées ne sont possibles qu’en mode reprise. Les remises restent hors périmètre.
 - Le siège et la session d’une inscription sont fixes, pour préserver son historique. Une nouvelle session nécessite une nouvelle fiche ; la réinscription liée à l’ancienne fiche viendra ensuite.
 - La caisse agrège tous les modes de paiement et toutes les sessions. Le filtre de session affecte les élèves et effectifs, pas le total financier historique.
 - Les totaux d’entrées/sorties incluent les contre-écritures. Le solde est la somme de toutes les écritures signées, solde initial inclus.
 - Les montants et durées des paiements sont figés au moment de l’encaissement. Un changement de tarif n’a aucun effet rétroactif.
 - Une annulation crée une écriture opposée et recalcule la validité avec les paiements non annulés, dans l’ordre de leurs dates et identifiants. On ne peut ni supprimer un mouvement ni annuler deux fois le même mouvement.
 - Les sièges ne sont pas supprimés ; les accès secrétaires et tarifs peuvent être désactivés.
+
+## Reprise comptable et fichiers
+
+- Les opérations de reprise passent par les mêmes contrôles que les opérations courantes, avec en plus une **date réelle** comprise entre le début de la reprise et aujourd’hui. `created_at` garde la date de saisie, `source='reprise'` les distingue.
+- Doublons : élève de même nom (siège + session), même n° de reçu papier dans un siège (refus), paiement/dépense/transfert de même montant à la même date (confirmation demandée).
+- Solde théorique = solde initial + encaissements − dépenses − transferts sortants + transferts reçus, calculé à la date du dernier comptage. Écart non nul : explication obligatoire pour valider.
+- Après validation d’un siège, aucune opération ne peut plus y être antidatée. La réouverture demande un motif et conserve l’historique.
+- Fichiers stockés en base (`gr_files`) car Vercel n’a pas de disque persistant : 4 Mo maximum, type contrôlé sur le contenu (PDF, JPEG, PNG, WebP). Les photos sont réduites dans le navigateur avant envoi.
+- Sauvegarde et restauration : voir [docs/SAUVEGARDE.md](docs/SAUVEGARDE.md).
 
 ## Paie des enseignants
 
@@ -90,7 +103,7 @@ Le solde initial se saisit depuis **Manuel d’utilisation** (section « Solde i
 - Pas de versement pour un mois futur ni de séance future. Un enseignant désactivé ne reçoit plus de séance ; ses mois avec activité restent consultables et payables. Solder ses mois avant de le désactiver.
 - Retenues, primes, cotisations sociales et bulletins de paie légaux sont hors périmètre.
 
-Au démarrage (`npm start`, `npm run dev`, `DEMARRER.cmd`) ou via `npm run db:init`, une base V1 existante est mise à niveau automatiquement : création des tables `gr_teachers`, `gr_teacher_sessions`, `gr_teacher_periods` et ajout des colonnes `teacher_id` / `period` au journal. Aucune donnée n’est modifiée ni supprimée.
+Au démarrage (`npm start`, `npm run dev`, `DEMARRER.cmd`) ou via `npm run db:init` / `npm run db:migrate`, une base existante est mise à niveau automatiquement et sans suppression : tables de paie, puis (novembre 2026) `gr_files`, `gr_subjects`, `gr_teacher_subjects`, `gr_counters`, `gr_cash_counts`, `gr_reprise_validations`, `gr_exams`, nouvelles colonnes des élèves, enseignants, paramètres et du journal. Les paiements déjà enregistrés reçoivent un numéro de reçu dans l’ordre chronologique ; les enseignants existants gardent leur nom et devront compléter leur dossier (matricule, photo, matières) à la prochaine modification.
 
 Tarifs de départ issus des documents : inscription 2 500 FCFA ; 4e/3e 5 000 FCFA ; Première A 6 000 FCFA ; Terminale A 7 000 FCFA. Les trois sièges sont Biyem-Assi, Ngoa Ekélé et Mendong. Les numéros des flyers sont des contacts du réseau, préremplis dans les fiches et modifiables.
 
@@ -181,4 +194,4 @@ Cette livraison fonctionne localement. Pour un accès entre les sièges via Inte
 
 ## Évolutions prévues
 
-Affectations des enseignants aux classes, retenues et primes, présences, emplois du temps, évaluations et notes, photos de profils, banque d’épreuves et documents, réinscriptions avec archives liées, SMS/e-mails et site vitrine. Ces modules ne sont pas simulés dans cette première version.
+Site vitrine public (partie III du cahier des charges), affectations des enseignants aux classes, retenues et primes, présences, emplois du temps, module d’évaluation et espace parent (partie IV), réinscriptions avec archives liées, SMS/e-mails. Ces modules ne sont pas simulés dans cette première version.

@@ -7,7 +7,7 @@ import { addDays, today } from '../src/domain.js';
 
 let cleanup,app,pool,rows,manager,secretary,other,managerCsrf,secretaryCsrf,otherCsrf,student1,student2,payment1,payment2,secretaryId;
 const password='Un mot de passe de test 2026!';
-const studentData=center=>({center_id:center,name:center===1?'Marie Atangana':'Paul Mballa',class_name:'Terminale A',group_name:'Soir',school_year:'2026-2027',parent_name:'Parent exemple',parent_phone:'+237 699 00 00 00',parent_email:'parent@example.com'});
+const studentData=center=>({center_id:center,name:center===1?'Marie Atangana':'Paul Mballa',class_name:'Terminale A',group_name:'Soir',school_year:'2026-2027',parent_name:'Parent exemple',parent_phone:'+237 699 00 00 00',parent_email:'parent@example.com',quarter:'Biyem-Assi Lac',school_status:'nouveau'});
 const post=(agent,path,csrf,body)=>agent.post(path).set('X-CSRF-Token',csrf).send(body);
 before(async()=>{
   cleanup=await createTestDatabase();
@@ -56,9 +56,13 @@ test('Protection des routes manager et des filtres de tableau de bord',async()=>
   await secretary.put('/api/settings').set('X-CSRF-Token',secretaryCsrf).send({school_year:'2027-2028'}).expect(403);
 });
 test('Inscription sans prolongation et paiement au montant du tarif serveur',async()=>{
-  await post(secretary,'/api/payments',secretaryCsrf,{student_id:student1,tariff_id:2,method:'cash',request_key:randomUUID(),amount:1}).expect(201);
+  await post(secretary,'/api/payments',secretaryCsrf,{student_id:student1,tariff_id:2,method:'cash',request_key:randomUUID(),amount:2501}).expect(400);
+  await post(secretary,'/api/payments',secretaryCsrf,{student_id:student1,tariff_id:2,method:'cash',request_key:randomUUID()}).expect(201);
+  await post(secretary,'/api/payments',secretaryCsrf,{student_id:student1,tariff_id:2,method:'cash',request_key:randomUUID()}).expect(409);
   assert.equal((await secretary.get(`/api/students/${student1}`)).body.valid_until,null);
-  const paid=await post(secretary,'/api/payments',secretaryCsrf,{student_id:student1,tariff_id:1,method:'cash',request_key:randomUUID(),amount:-1}).expect(201);payment1=paid.body.id;
+  await post(secretary,'/api/payments',secretaryCsrf,{student_id:student1,tariff_id:1,method:'cash',request_key:randomUUID(),amount:-1}).expect(400);
+  const paid=await post(secretary,'/api/payments',secretaryCsrf,{student_id:student1,tariff_id:1,method:'cash',request_key:randomUUID()}).expect(201);payment1=paid.body.id;
+  assert.match(paid.body.receipt_number,/^REC-\d{4}-\d{6}$/);
   assert.equal(paid.body.valid_until,addDays(today(),30));
   const entry=(await secretary.get(`/api/ledger/${payment1}`)).body;assert.equal(entry.amount,5000);assert.equal(entry.center_id,1);
   await other.get(`/api/ledger/${payment1}`).expect(403);

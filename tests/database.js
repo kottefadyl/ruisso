@@ -14,9 +14,10 @@ export async function createTestDatabase() {
   await admin.query(`USE \`${database}\``);
   try {
     for(const sql of readFileSync(new URL('../database/schema.sql',import.meta.url),'utf8').split(';').map(x=>x.trim()).filter(Boolean)) await admin.query(sql);
-    await admin.query("INSERT INTO gr_settings VALUES (1,'2026-2027')");
+    await admin.query("INSERT INTO gr_settings (id,school_year) VALUES (1,'2026-2027')");
     await admin.query("INSERT INTO gr_centers (name,address,phone) VALUES ('Biyem-Assi','Biyem-Assi, lac — Yaoundé','+237 652 25 11 44'),('Mendong','Collège Champ du Lys — Yaoundé','+237 695 62 54 87'),('Ngoa Ekélé','École primaire — Yaoundé','+237 652 25 11 44')");
     await admin.query("INSERT INTO gr_tariffs (name,amount,duration_days) VALUES ('Mensualité',5000,30),('Inscription',2500,0)");
+    await admin.query("INSERT INTO gr_subjects (name) VALUES ('Mathématiques'),('Physique'),('Français')");
     process.env.DB_NAME=database;
     process.env.NODE_ENV='test';
     process.env.SESSION_SECRET=randomBytes(48).toString('hex');

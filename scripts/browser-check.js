@@ -15,6 +15,8 @@ const chrome=process.env.CHROME_PATH || ['C:/Program Files/Google/Chrome/Applica
 let browser;
 mkdirSync('artifacts',{recursive:true});
 const errors=[];
+// Image PNG 1 × 1 réelle : la photo est redimensionnée dans le navigateur avant envoi.
+const photo=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=','base64');
 let expectedUnauthorized=false;
 try {
   browser=await chromium.launch({headless:true,...(chrome?{executablePath:chrome}:{})});
@@ -22,7 +24,7 @@ try {
   context.setDefaultTimeout(15000);
   const page=await context.newPage();
   page.on('pageerror',error=>errors.push(error.message));
-  page.on('console',message=>{if(message.type()==='error' && !(expectedUnauthorized && message.text().includes('401')))errors.push(message.text());});
+  page.on('console',message=>{if(message.type()==='error' && !(expectedUnauthorized && message.text().includes('401')) && !message.text().includes('409 (Conflict)'))errors.push(message.text());});
   await page.goto(`${base}/initialisation#token=${process.env.SETUP_TOKEN}`);
   await page.getByRole('heading',{name:'Bienvenue chez vous.'}).waitFor();
   await page.screenshot({path:'artifacts/connexion-desktop.png',fullPage:true});
@@ -37,6 +39,8 @@ try {
   await page.getByLabel('Nom complet de l’élève *').fill('Marie Atangana');
   await page.getByLabel('Classe *',{exact:true}).fill('Terminale A');
   await page.getByLabel('Groupe',{exact:true}).fill('Groupe du soir');
+  await page.getByLabel('Statut scolaire *').selectOption('nouveau');
+  await page.getByLabel('Quartier',{exact:true}).fill('Biyem-Assi Lac');
   await page.getByLabel('Nom du parent / tuteur *').fill('Paul Atangana');
   await page.getByLabel('Téléphone du parent *').fill('+237 699 00 00 00');
   await page.getByRole('button',{name:'Inscrire l’élève',exact:true}).click();
@@ -45,15 +49,24 @@ try {
   await page.getByLabel('Rechercher l’élève *').fill('Marie');
   await page.getByRole('option',{name:/Marie Atangana/}).click();
   assert.equal(await page.getByRole('radio',{name:/Mensualité/}).isChecked(),true,'La mensualité doit être proposée par défaut');
-  assert.match(await page.locator('#payment-summary').innerText(),/Validité prolongée jusqu’au/);
+  await page.locator('#payment-summary',{hasText:'Validité prolongée jusqu’au'}).waitFor();
+  assert.equal(await page.locator('#payment-period').inputValue(),new Date().toISOString().slice(0,7));
   await page.getByRole('button',{name:/^Encaisser 5.000 FCFA$/}).click();
   await page.getByRole('heading',{name:'Justificatif d’opération'}).waitFor();
   await page.screenshot({path:'artifacts/recu-paiement.png',fullPage:true});
-  await page.pdf({path:'artifacts/recu-paiement.pdf',format:'A4',printBackground:true});
-  const receiptPdf=new PDFParse({data:readFileSync('artifacts/recu-paiement.pdf')});
+  // Reçu imprimé au format A5 (148 × 210 mm = 419,5 × 595,3 points), sur une seule page.
+  await page.emulateMedia({media:'print'});
+  await page.pdf({path:'artifacts/recu-paiement.pdf',preferCSSPageSize:true,printBackground:true});
+  await page.emulateMedia({media:'screen'});
+  const receiptBytes=readFileSync('artifacts/recu-paiement.pdf');
+  const box=receiptBytes.toString('latin1').match(/\/MediaBox\s*\[\s*0 0 ([\d.]+) ([\d.]+)\s*\]/);
+  assert.ok(box && Math.abs(Number(box[1])-419.5)<2 && Math.abs(Number(box[2])-595.3)<2,`Le reçu doit être au format A5 (${box?.slice(1).join(' × ')})`);
+  const receiptPdf=new PDFParse({data:receiptBytes});
   const receiptText=await receiptPdf.getText();
-  assert.equal(receiptText.total,1,'Le reçu doit tenir sur une page A4');
-  assert.match(receiptText.text,/Reçu de paiement/);
+  assert.equal(receiptText.total,1,'Le reçu doit tenir sur une seule page A5');
+  assert.match(receiptText.text,/Reçu de paiement/i);
+  assert.match(receiptText.text,/REC-\d{4}-000001/);
+  assert.match(receiptText.text,/Paiement effectué en totalité/);
   assert.doesNotMatch(receiptText.text,/Bonjour, Jean/,'Le tableau de bord ne doit pas être imprimé');
   await receiptPdf.destroy();
   await page.getByRole('button',{name:'Fermer',exact:true}).last().click();
@@ -75,17 +88,17 @@ try {
   await page.getByRole('heading',{name:'Fiche élève'}).waitFor();
   assert.match(await page.locator('#modal').innerText(),/30 jours restants/);
   await page.getByRole('button',{name:'Fermer',exact:true}).click();
-  for(const name of ['Paiements','Nos sièges','Équipe & accès','Paramètres','Journal d’activité','Manuel d’utilisation']) {
+  for(const name of ['Paiements','Banque d’épreuves','Reprise comptable','Nos sièges','Équipe & accès','Paramètres','Journal d’activité','Manuel d’utilisation']) {
     await page.getByRole('link',{name,exact:true}).click();
     await page.locator('#page[aria-busy="true"]').waitFor({state:'detached'});
     assert.ok((await page.locator('#page').innerText()).length>100);
   }
   // Manuel : toutes les sections pour le manager, recherche sans accents.
-  await page.locator('.manual-section').nth(15).waitFor();
-  assert.equal(await page.locator('.manual-section').count(),16);
+  await page.locator('.manual-section').nth(18).waitFor();
+  assert.equal(await page.locator('.manual-section').count(),19);
   await page.screenshot({path:'artifacts/manuel.png'});
   await page.getByLabel('Rechercher dans le manuel').fill('seance');
-  assert.ok(await page.locator('.manual-section:visible').count()<16);
+  assert.ok(await page.locator('.manual-section:visible').count()<19);
   assert.match(await page.locator('.manual-section:visible').first().innerText(),/séance/i);
   await page.getByLabel('Rechercher dans le manuel').fill('');
   await page.getByRole('link',{name:'Tableau de bord'}).click();
@@ -116,37 +129,102 @@ try {
   // Paie des enseignants : un enseignant à l’heure, un au salaire fixe, une séance et un salaire.
   await page.getByRole('link',{name:'Enseignants & paie',exact:true}).click();
   await page.getByRole('heading',{name:'Enseignants & paie',exact:true}).waitFor();
+  const fillTeacher=async(matricule,last,first)=>{
+    await page.getByRole('button',{name:'Nouvel enseignant',exact:true}).first().click();
+    await page.getByLabel('Matricule *').fill(matricule);
+    await page.getByLabel('Nom *',{exact:true}).fill(last);
+    await page.getByLabel('Prénom *',{exact:true}).fill(first);
+    await page.getByLabel('Téléphone *',{exact:true}).fill('+237 699 11 22 33');
+    await page.getByLabel('Grade').fill('PLEG');
+    await page.locator('#teacher-form input[data-upload="photo"]').setInputFiles({name:'photo.png',mimeType:'image/png',buffer:photo});
+    await page.locator('#teacher-form .file-drop.done').waitFor();
+    await page.locator('#teacher-form').getByText('Mathématiques',{exact:true}).click();
+  };
+  // Sans photographie, le dossier est refusé.
   await page.getByRole('button',{name:'Nouvel enseignant',exact:true}).first().click();
-  await page.getByLabel('Nom complet *').fill('Paul Essomba');
+  for(const [label,value] of [['Matricule *','ENS-000'],['Nom *','Sans'],['Prénom *','Photo'],['Téléphone *','+237 699 11 22 33'],['Taux horaire en FCFA *','1000']]) await page.getByLabel(label,{exact:true}).fill(value);
+  await page.locator('#teacher-form').getByText('Physique',{exact:true}).click();
+  await page.getByRole('button',{name:'Créer le dossier'}).click();
+  await page.locator('#teacher-form .form-error',{hasText:'photographie'}).waitFor();
+  await page.getByRole('button',{name:'Fermer',exact:true}).click();
+  await fillTeacher('ENS-001','Essomba','Paul');
   await page.getByLabel('Taux horaire en FCFA *').fill('2000');
-  await page.getByRole('button',{name:'Créer la fiche'}).click();
-  await page.getByRole('button',{name:'Voir Paul Essomba',exact:true}).waitFor();
-  await page.getByRole('button',{name:'Nouvel enseignant',exact:true}).first().click();
-  await page.getByLabel('Nom complet *').fill('Claire Ngono');
+  await page.screenshot({path:'artifacts/dossier-enseignant.png'});
+  await page.getByRole('button',{name:'Créer le dossier'}).click();
+  await page.getByRole('button',{name:'Voir Essomba Paul',exact:true}).waitFor();
+  await fillTeacher('ENS-002','Ngono','Claire');
   await page.getByLabel('Mode de paie *').selectOption('monthly');
   assert.equal(await page.getByLabel('Taux horaire en FCFA *').isVisible(),false);
   await page.getByLabel('Salaire mensuel en FCFA *').fill('80000');
-  await page.getByRole('button',{name:'Créer la fiche'}).click();
-  await page.getByRole('button',{name:'Voir Claire Ngono',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Créer le dossier'}).click();
+  await page.getByRole('button',{name:'Voir Ngono Claire',exact:true}).waitFor();
   await page.getByRole('button',{name:'Saisir une séance',exact:true}).click();
-  await page.getByLabel('Enseignant *').selectOption({label:'Paul Essomba · À l’heure · 2 000 FCFA / h'});
+  await page.getByLabel('Enseignant *').selectOption({label:'Essomba Paul · À l’heure · 2 000 FCFA / h'});
   await page.getByLabel('Durée en heures *').fill('1.5');
   await page.getByRole('button',{name:'Enregistrer la séance'}).click();
-  await page.locator('tr',{hasText:'Paul Essomba'}).getByText('1 h 30').waitFor();
-  await page.getByRole('button',{name:'Payer Paul Essomba',exact:true}).click();
+  await page.locator('tr',{hasText:'Essomba Paul'}).getByText('1 h 30').waitFor();
+  await page.getByRole('button',{name:'Payer Essomba Paul',exact:true}).click();
   assert.equal(await page.getByLabel('Montant en FCFA *').inputValue(),'3000');
   await page.getByRole('button',{name:'Enregistrer le versement'}).click();
   await page.getByRole('heading',{name:'Justificatif d’opération'}).waitFor();
-  assert.match(await page.locator('#print-area').textContent(),/Bulletin de versement de salaire[\s\S]*Paul Essomba/);
+  assert.match(await page.locator('#print-area').textContent(),/Bon de salaire[\s\S]*Essomba Paul/);
   await page.getByRole('button',{name:'Fermer',exact:true}).last().click();
-  await page.locator('tr',{hasText:'Paul Essomba'}).getByText('Soldé').waitFor();
-  await page.locator('tr',{hasText:'Claire Ngono'}).getByText('À payer').waitFor();
+  await page.locator('tr',{hasText:'Essomba Paul'}).getByText('Soldé').waitFor();
+  await page.locator('tr',{hasText:'Ngono Claire'}).getByText('À payer').waitFor();
   await page.screenshot({path:'artifacts/enseignants-paie.png',fullPage:true});
-  await page.getByRole('button',{name:'Voir Paul Essomba',exact:true}).click();
-  await page.getByRole('heading',{name:'Fiche enseignant'}).waitFor();
+  await page.getByRole('button',{name:'Voir Essomba Paul',exact:true}).click();
+  await page.getByRole('heading',{name:'Dossier enseignant'}).waitFor();
+  assert.match(await page.locator('#modal').innerText(),/ENS-001[\s\S]*Mathématiques/);
   await page.screenshot({path:'artifacts/fiche-enseignant.png'});
   await page.getByRole('button',{name:'Fermer',exact:true}).first().click();
   assert.deepEqual(errors,[],'Erreurs JavaScript ou CSP sur la paie');
+  // Banque d’épreuves : dépôt d’un PDF puis refus du même fichier.
+  await page.getByRole('link',{name:'Banque d’épreuves',exact:true}).click();
+  await page.getByRole('heading',{name:'Banque d’épreuves',exact:true}).waitFor();
+  const depositExam=async title=>{
+    await page.getByRole('button',{name:'Déposer un sujet',exact:true}).first().click();
+    await page.locator('#exam-form .file-status',{hasText:'Choisir le PDF'}).waitFor();
+    await page.locator('#exam-form input[data-upload="exam"]').setInputFiles({name:'sujet.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4\nSujet de test\n%%EOF')});
+  };
+  await depositExam();
+  await page.locator('#exam-form .file-drop.done').waitFor();
+  await page.getByLabel('Titre du sujet *').fill('Composition de mathématiques');
+  await page.getByLabel('Matière *').selectOption({label:'Mathématiques'});
+  await page.getByLabel('Classe *',{exact:true}).fill('3e');
+  await page.getByLabel('Séquence / période *').fill('Séquence 1');
+  await page.getByRole('button',{name:'Déposer le sujet'}).click();
+  await page.locator('tr',{hasText:'Composition de mathématiques'}).waitFor();
+  await page.screenshot({path:'artifacts/banque-epreuves.png',fullPage:true});
+  await depositExam();
+  await page.locator('#exam-form .file-drop.failed',{hasText:'déjà dans la banque'}).waitFor();
+  await page.getByRole('button',{name:'Fermer',exact:true}).click();
+  // Reprise comptable : dépense antidatée, comptage physique, validation avec écart expliqué, état PDF.
+  await page.getByRole('link',{name:'Reprise comptable',exact:true}).click();
+  await page.getByRole('heading',{name:'Reprise comptable',exact:true}).waitFor();
+  await page.locator('.reprise-steps').getByRole('button',{name:'Dépense',exact:true}).click();
+  await page.getByLabel('Date réelle de l’opération *').fill(new Date(Date.now()-86400000).toISOString().slice(0,10)>'2026-11-05'?new Date(Date.now()-86400000).toISOString().slice(0,10):'2026-11-05');
+  await page.getByLabel('N° du reçu / de la pièce papier').fill('F-17');
+  await page.getByLabel('Montant en FCFA *').fill('500');
+  await page.getByLabel('Catégorie *').fill('Transport');
+  await page.getByLabel('Motif *').fill('Taxi pour livrer les fournitures');
+  await page.getByText('Pièce justificative manquante').click();
+  await page.getByRole('button',{name:'Enregistrer l’opération'}).click();
+  await page.getByRole('heading',{name:'Justificatif d’opération'}).waitFor();
+  assert.match(await page.locator('#print-area').textContent(),/saisie le/);
+  await page.getByRole('button',{name:'Fermer',exact:true}).last().click();
+  await page.locator('.reprise-steps').getByRole('button',{name:'Comptage',exact:true}).click();
+  await page.getByLabel('Espèces comptées (FCFA) *').fill('1000');
+  await page.getByRole('button',{name:'Enregistrer le comptage'}).click();
+  await page.locator('.reprise-card .badge.urgent',{hasText:'Écart'}).first().waitFor();
+  await page.screenshot({path:'artifacts/reprise-comptable.png',fullPage:true});
+  await page.locator('.reprise-card').first().getByRole('button',{name:'Valider',exact:true}).click();
+  await page.getByLabel('Explication de l’écart *').fill('Argent remis au promoteur sans bon, régularisation demandée.');
+  await page.getByRole('button',{name:'Valider la reprise'}).click();
+  await page.locator('.reprise-card .badge.active',{hasText:'Validé le'}).first().waitFor();
+  await page.evaluate(()=>{window.print=()=>{};});
+  await page.getByRole('button',{name:'État consolidé (PDF)'}).click();
+  assert.match(await page.locator('#print-area').textContent(),/État de reprise comptable consolidé[\s\S]*Solde théorique/);
+  assert.deepEqual(errors,[],'Erreurs JavaScript ou CSP sur la banque d’épreuves ou la reprise');
   await page.getByRole('link',{name:'Élèves',exact:true}).click();
   await page.getByRole('button',{name:'Voir Marie Atangana',exact:true}).click();
   await page.getByRole('heading',{name:'Fiche élève'}).waitFor();
@@ -162,7 +240,7 @@ try {
   await page.getByRole('button',{name:'Se connecter',exact:true}).click();
   await page.getByRole('heading',{name:/Bonjour, Jean/}).waitFor();
   assert.deepEqual(errors,[],'Erreurs JavaScript ou CSP après expiration de session');
-  console.log('Navigateur OK : initialisation, inscription, paiement, reçu, dépense, solde, fiches, navigation, mobile, reconnexion et expiration de session.');
+  console.log('Navigateur OK : initialisation, inscription, paiement, reçu A5, dépense, solde, dossiers enseignants, banque d’épreuves, reprise comptable, navigation, mobile, reconnexion et expiration de session.');
   console.log('Captures disponibles dans artifacts/. La base temporaire va être supprimée.');
 } catch(error) {
   console.error('Vérification navigateur échouée :',error);

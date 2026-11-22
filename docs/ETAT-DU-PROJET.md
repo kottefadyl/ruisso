@@ -1,4 +1,17 @@
-# État du projet — 18 novembre 2026
+# État du projet — 22 novembre 2026
+
+## Dernière intervention : cahier des charges du 19 novembre (parties I et II) et reçu A5
+
+- **Fiche élève** : quartier, statut Nouveau/Redoublant (parcours existant proposé), date réelle d’inscription, doublons signalés.
+- **Dossier enseignant** : matricule, nom, prénom, adresse, grade, téléphone, e-mail, photo obligatoire, matières multiples prédéfinies (gérées dans Paramètres).
+- **Banque d’épreuves** PDF : classement matière/classe/séquence/année, recherche, consultation, téléchargement, doublons, archivage.
+- **Reprise comptable** : date réelle + date de saisie, n° de reçu papier, justificatifs et pièces manquantes, transferts et reversements, comptages, rapprochement, état PDF, validation horodatée et verrouillage.
+- **Paiements partiels** avec mois concerné et reste à payer ; **reçu A5** numéroté sur le modèle fourni.
+- Plan de sauvegarde : `docs/SAUVEGARDE.md`. Tests : `npm test` (33 tests) et `npm run test:browser`.
+- **Non fait** : partie III (site vitrine public) ; partie IV (évaluations, espace parent) prévue en phase ultérieure.
+- **Avant mise en production** : lancer `npm run db:migrate` sur la base en ligne après un export de sauvegarde, puis déployer.
+
+## Intervention du 18 novembre
 
 ## Périmètre confirmé
 

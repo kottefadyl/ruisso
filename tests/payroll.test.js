@@ -5,12 +5,14 @@ import { randomUUID } from 'node:crypto';
 import { createTestDatabase } from './database.js';
 import { today, payrollSummary, periodBounds, sessionAmount, schemas } from '../src/domain.js';
 
-let cleanup,app,pool,rows,manager,secretary,other,mCsrf,sCsrf,oCsrf,hourly,monthly,session1,salaryId;
+let cleanup,app,pool,rows,manager,secretary,other,mCsrf,sCsrf,oCsrf,hourly,monthly,session1,salaryId,photoId;
 const password='Un mot de passe de test 2026!';
 const period=today().slice(0,7);
 const post=(agent,path,csrf,body)=>agent.post(path).set('X-CSRF-Token',csrf).send(body);
 const login=async(agent,email)=>{const csrf=(await agent.get('/api/auth/bootstrap')).body.csrf;return (await post(agent,'/api/auth/login',csrf,{email,password}).expect(200)).body.csrf;};
-const teacherData=extra=>({name:'Enseignant',phone:'',subjects:'Mathématiques',pay_type:'hourly',hourly_rate:2000,monthly_salary:0,hired_on:`${period}-01`,active:true,...extra});
+// Dossier enseignant complet : matricule, nom, prénom, téléphone, photo et matières obligatoires.
+const teacherData=({name='Enseignant Test',...extra}={})=>{const [last_name,...first]=name.split(' ');return {matricule:`MAT-${name.replace(/\s+/g,'-')}`,last_name,first_name:first.join(' ')||'Test',address:'Yaoundé',grade:'PLEG',email:'',phone:'+237 699 11 22 33',photo_file_id:photoId,subject_ids:[1],pay_type:'hourly',hourly_rate:2000,monthly_salary:0,hired_on:`${period}-01`,active:true,...extra};};
+const pngBytes=Buffer.concat([Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]),Buffer.from('image de test')]);
 const summary=async(agent,id)=>(await agent.get(`/api/teachers/${id}?period=${period}`).expect(200)).body.summary;
 const pay=(agent,csrf,id,extra)=>post(agent,`/api/teachers/${id}/payments`,csrf,{center_id:1,period,kind:'salary',method:'cash',request_key:randomUUID(),...extra});
 
@@ -24,6 +26,7 @@ before(async()=>{
   await post(manager,'/api/users',mCsrf,{name:'Secrétaire Biyem',email:'s1@example.com',password,center_id:1}).expect(201);
   await post(manager,'/api/users',mCsrf,{name:'Secrétaire Mendong',email:'s2@example.com',password,center_id:2}).expect(201);
   sCsrf=await login(secretary,'s1@example.com');oCsrf=await login(other,'s2@example.com');
+  photoId=(await manager.post('/api/files?purpose=photo&name=photo.png').set('X-CSRF-Token',mCsrf).set('Content-Type','application/octet-stream').send(pngBytes).expect(201)).body.id;
 });
 after(async()=>{await app?.locals.sessionStore.close();await pool?.end();await cleanup?.();});
 
